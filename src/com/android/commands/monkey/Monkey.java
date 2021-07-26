@@ -25,12 +25,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Writer;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Random;
-import java.util.Set;
+import java.util.*;
 
 import com.android.commands.monkey.ape.Agent;
 import com.android.commands.monkey.ape.AndroidDevice;
@@ -249,7 +244,7 @@ public class Monkey {
     private boolean mApeCleanApp;
     private String mApeAgent;
     private File mOutputDirectory;
-    private HashSet<Integer> mUids = new HashSet<Integer>();
+    private Map<String, Integer> mUids = new HashMap<>();
     private long mRunningMillis = -1;
     private long mEndTime;
 
@@ -724,7 +719,7 @@ public class Monkey {
             AndroidDevice.initializeAndroidDevice(mAm, mWm, mPm);
             AndroidDevice.checkInteractive();
             mEventSource = new MonkeySourceApe(mRandom, mMainApps, mThrottle,
-                    mRandomizeThrottle, mPermissionTargetSystem, mOutputDirectory);
+                    mRandomizeThrottle, mPermissionTargetSystem, mOutputDirectory, mUids);
             mEventSource.setVerbose(mVerbose);
             if (mApeCleanApp) {
                 for (ComponentName cn : mMainApps) {
@@ -1217,7 +1212,7 @@ public class Monkey {
                             System.out.println("//   + Using main activity " + r.activityInfo.name + " (from package "
                                     + packageName + ")");
                         }
-                        mUids.add(r.activityInfo.applicationInfo.uid);
+                        mUids.put(packageName, r.activityInfo.applicationInfo.uid);
                         mMainApps.add(new ComponentName(packageName, r.activityInfo.name));
                     } else {
                         if (mVerbose >= 3) { // very very verbose

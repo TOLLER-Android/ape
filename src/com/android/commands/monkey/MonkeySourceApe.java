@@ -24,17 +24,15 @@ import static com.android.commands.monkey.ape.utils.Config.refectchInfoCount;
 import static com.android.commands.monkey.ape.utils.Config.refectchInfoWaitingInterval;
 import static com.android.commands.monkey.ape.utils.Config.swipeDuration;
 
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.PrintWriter;
+import java.io.*;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.TimeUnit;
 
+import android.graphics.*;
 import com.android.commands.monkey.ape.Agent;
 import com.android.commands.monkey.ape.AndroidDevice;
 import com.android.commands.monkey.ape.ImageWriterQueue;
@@ -53,14 +51,9 @@ import com.android.commands.monkey.ape.utils.RandomHelper;
 
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.ActivityManager.RunningAppProcessInfo;
-import android.app.ActivityManager.RunningTaskInfo;
 import android.app.UiAutomation;
 import android.app.UiAutomationConnection;
 import android.content.ComponentName;
-import android.graphics.Bitmap;
-import android.graphics.Point;
-import android.graphics.PointF;
-import android.graphics.Rect;
 import android.hardware.display.DisplayManagerGlobal;
 import android.os.Build;
 import android.os.HandlerThread;
@@ -73,6 +66,7 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.accessibility.AccessibilityNodeInfo;
+import org.json.JSONObject;
 
 /**
  * monkey event queue
@@ -83,8 +77,7 @@ public class MonkeySourceApe implements MonkeyEventSource {
     private static long LONG_CLICK_WAIT_TIME = 1000L;
 
     private static final boolean useRandomClick = false;
-
-
+    private static final boolean USE_INTERNAL_UIAUTOMATOR = System.getenv("USE_EXT_UIAUTOMATOR") == null;
 
     /** Possible screen rotation degrees **/
     private static final int[] SCREEN_ROTATION_DEGREES = { Surface.ROTATION_0, Surface.ROTATION_90,
@@ -99,6 +92,7 @@ public class MonkeySourceApe implements MonkeyEventSource {
     private boolean mRandomizeThrottle = false;
     private MonkeyPermissionUtil mPermissionUtil;
     private Random mRandom;
+    private Map<String, Integer> mPackageUids;
 
     // private boolean mKeyboardOpen = false;
     private Agent mAgent;
@@ -120,7 +114,7 @@ public class MonkeySourceApe implements MonkeyEventSource {
      * UiAutomation client and connection
      */
     protected final HandlerThread mHandlerThread = new HandlerThread("MonkeySourceApe");
-    protected UiAutomation mUiAutomation;
+    protected UiAutomation mUiAutomation = null;
 
     public static String getKeyName(int keycode) {
         return KeyEvent.keyCodeToString(keycode);
@@ -161,14 +155,17 @@ public class MonkeySourceApe implements MonkeyEventSource {
             throw new IllegalStateException("Already connected!");
         }
         mHandlerThread.start();
-        mUiAutomation = new UiAutomation(mHandlerThread.getLooper(), new UiAutomationConnection());
-        mUiAutomation.connect();
 
-        AccessibilityServiceInfo info = mUiAutomation.getServiceInfo();
-        // Compress this node
-        info.flags &= ~AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS;
+        if (USE_INTERNAL_UIAUTOMATOR) {
+            mUiAutomation = new UiAutomation(mHandlerThread.getLooper(), new UiAutomationConnection());
+            mUiAutomation.connect();
 
-        mUiAutomation.setServiceInfo(info);
+            AccessibilityServiceInfo info = mUiAutomation.getServiceInfo();
+            // Compress this node
+            info.flags &= ~AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS;
+
+            mUiAutomation.setServiceInfo(info);
+        }
 
         mImageWriters = new ImageWriterQueue[imageWriterCount];
         for (int i = 0; i < 3; i++) {
@@ -189,7 +186,7 @@ public class MonkeySourceApe implements MonkeyEventSource {
         if (!mHandlerThread.isAlive()) {
             throw new IllegalStateException("Already disconnected!");
         }
-        mUiAutomation.disconnect();
+        if (mUiAutomation != null) mUiAutomation.disconnect();
         mHandlerThread.quit();
     }
 
@@ -207,8 +204,8 @@ public class MonkeySourceApe implements MonkeyEventSource {
 
     public MonkeySourceApe(Random random,
             List<ComponentName> MainApps, long throttle, boolean randomizeThrottle, boolean permissionTargetSystem,
-            File outputDirectory) {
-        mRandom = random;
+            File outputDirectory, Map<String, Integer> packageUids) {
+        RandomHelper.sRandom = mRandom = random;
         mMainApps = MainApps;
         packagePermissions = new HashMap<>();
         for (ComponentName app : MainApps) {
@@ -228,6 +225,7 @@ public class MonkeySourceApe implements MonkeyEventSource {
         mEventProduceLogger = openWriter(mEventProduceLoggerFile);
         mEventConsumeLoggerFile = new File(mOutputDirectory, "consume.log");
         mEventConsumeLogger = openWriter(mEventConsumeLoggerFile);
+        mPackageUids = packageUids;
 
         mAgent = ApeAgent.createAgent(this);
         connect();
@@ -458,16 +456,43 @@ public class MonkeySourceApe implements MonkeyEventSource {
      * @return
      */
     public AccessibilityNodeInfo getRootInActiveWindow() {
-        return mUiAutomation.getRootInActiveWindow();
+        if (mUiAutomation == null) return getRootInActiveWindowExternal();
+        long begin = SystemClock.elapsedRealtimeNanos();
+        AccessibilityNodeInfo ret = null;
+        if (ret == null) ret = mUiAutomation.getRootInActiveWindow();
+        long end = SystemClock.elapsedRealtimeNanos();
+        Logger.iformat("getRootInActiveWindow takes %d ms.", TimeUnit.NANOSECONDS.toMillis(end - begin));
+        return ret;
     }
 
     public AccessibilityNodeInfo getRootInActiveWindowSlow() {
+        if (mUiAutomation == null) return getRootInActiveWindowExternal();
         try {
             mUiAutomation.waitForIdle(1000, 1000 * 10);
         } catch (TimeoutException e) {
             e.printStackTrace();
         }
-        return mUiAutomation.getRootInActiveWindow();
+        return /*mUiAutomation.*/getRootInActiveWindow();
+    }
+
+    public static final String XML_DUMP_PATH = "/data/local/tmp/ape_window_dump.xml";
+    public static AccessibilityNodeInfo magicNodeInfo = null;
+    public AccessibilityNodeInfo getRootInActiveWindowExternal() {
+        try {
+            long tsStart = System.currentTimeMillis();
+            Process p = Runtime.getRuntime().exec(new String[]{"uiautomator", "dump", "--verbose", XML_DUMP_PATH});
+            int ret = p.waitFor();
+            long tsUsed = System.currentTimeMillis() - tsStart;
+            Logger.iformat("Invoked external UIAutomator, ret = %d, time used = %d ms", ret, tsUsed);
+        } catch (Exception e) {
+            Logger.wprintln("Execution failed: " + e);
+            return null;
+        }
+        if (magicNodeInfo == null) {
+            magicNodeInfo = AccessibilityNodeInfo.obtain();
+            magicNodeInfo.setClassName("__THIS_IS_MAGIC__");
+        }
+        return magicNodeInfo;
     }
 
     /* private */ static final int GESTURE_TAP = 0;
@@ -1157,6 +1182,12 @@ public class MonkeySourceApe implements MonkeyEventSource {
         this.lastStartTimestamp = timestamp;
     }
 
+    private int mCtWaitForActivity = 0;
+    private final String STR_MAX_CT_WAIT_FOR_ACTIVITY = System.getenv("MAX_CT_WAIT_FOR_ACTIVITY");
+    private final int MAX_CT_WAIT_FOR_ACTIVITY =
+            STR_MAX_CT_WAIT_FOR_ACTIVITY == null ? Integer.MAX_VALUE : Integer.parseInt(STR_MAX_CT_WAIT_FOR_ACTIVITY);
+    private final String CMD_APP_RESTART = System.getenv("CMD_APP_RESTART");
+
     protected void checkAppActivity() {
         ComponentName cn = getTopActivityComponentName();
         if (cn == null) {
@@ -1177,10 +1208,21 @@ public class MonkeySourceApe implements MonkeyEventSource {
             return;
         }
         if (this.waitForActivity) {
+            if (CMD_APP_RESTART != null && ++mCtWaitForActivity >= MAX_CT_WAIT_FOR_ACTIVITY) {
+                mCtWaitForActivity = 0;
+                Logger.iprintln("Executing: " + CMD_APP_RESTART);
+                try {
+                    Runtime.getRuntime().exec(new String[]{"sh", "-c", CMD_APP_RESTART}).waitFor();
+                } catch (Exception e) {
+                    Logger.wprintln("Execution failed: " + e);
+                }
+            }
             Logger.iprintln("We are still waiting for activity loading. Let's wait for another 100ms...");
+            Logger.iprintln("FYI: current act = " + cn.toShortString());
             generateThrottleEvent(100);
             return;
         }
+        mCtWaitForActivity = 0;
         if (cn.getPackageName().equals("com.android.systemui")
                 && cn.getClassName().equals("com.android.systemui.recents.RecentsActivity")) {
             if (hasEvent()) {
@@ -1199,16 +1241,16 @@ public class MonkeySourceApe implements MonkeyEventSource {
     protected void generateClearEvent(GUITreeNode node) {
         Rect bounds = node.getBoundsInScreen();
         int lines = 1;
+        String fullText = null;
         if (node.getNodeInfo() != null) {
             AccessibilityNodeInfo info = node.getNodeInfo();
             if (info.getText() != null) {
-                String fullText = info.getText().toString();
-                if (fullText.isEmpty()) {
-                    return;
-                }
-                lines = fullText.split(System.lineSeparator()).length;
+                fullText = info.getText().toString();
             }
         }
+        if (fullText == null) fullText = node.getText();
+        if (fullText == null || fullText.isEmpty()) return;
+        lines = fullText.split(System.lineSeparator()).length;
         // 1) Move cursor to the top left
         generateClickEventAt(bounds, CLICK_WAIT_TIME, ClickPoint.TOP_LEFT);
         generateThrottleEvent(50);
@@ -1295,6 +1337,7 @@ public class MonkeySourceApe implements MonkeyEventSource {
     }
 
     public boolean takeScreenshot(File screenshotFile) {
+        if (mUiAutomation == null) return false;
         Bitmap map = mUiAutomation.takeScreenshot();
         nextImageWriter().add(map, screenshotFile);
         return true;
@@ -1309,7 +1352,27 @@ public class MonkeySourceApe implements MonkeyEventSource {
     }
 
     public Bitmap captureBitmap() {
-        Bitmap map = mUiAutomation.takeScreenshot();
-        return map;
+        if (mUiAutomation == null) {
+            try {
+                Process p = Runtime.getRuntime().exec(new String[]{"screencap", "-p"});
+                BufferedInputStream ins = new BufferedInputStream(p.getInputStream());
+                ByteArrayOutputStream outs = new ByteArrayOutputStream();
+                int c; byte[] buf = new byte[4096];
+                while ((c = ins.read(buf)) >= 0) outs.write(buf, 0, c);
+                ins.close();
+                Logger.iformat("Screenshot ret = %d", p.waitFor());
+                byte[] data = outs.toByteArray();
+                int l = data.length;
+                Logger.iformat("|image| = %d -> %d", data.length, l);
+                Bitmap bmp = BitmapFactory.decodeByteArray(data, 0, l);
+                Logger.iformat("Captured, w = %d, h = %d", bmp.getWidth(), bmp.getHeight());
+                return bmp;
+            } catch (Exception e) {
+                // Logger.wformat("Screenshot failed: " + e);
+                e.printStackTrace();
+                return null;
+            }
+        }
+        return mUiAutomation.takeScreenshot();
     }
 }

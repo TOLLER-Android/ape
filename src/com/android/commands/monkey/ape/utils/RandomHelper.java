@@ -6,8 +6,11 @@ import java.util.concurrent.ThreadLocalRandom;
 
 public class RandomHelper {
 
+    public static Random sRandom = null;
+
     public static Random getRandom() {
-        return ThreadLocalRandom.current();
+        // It seems that this class is rarely used across threads (if used anywhere this way).
+        return sRandom == null ? ThreadLocalRandom.current() : sRandom;
     }
     
     public static int nextInt() {

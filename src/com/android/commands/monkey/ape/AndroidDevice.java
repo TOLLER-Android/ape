@@ -353,7 +353,7 @@ public class AndroidDevice {
 
     private static boolean clearPackage(String packageName) {
         try {
-            int ret = executeCommandAndWaitFor(new String[] { "pm", "clear", packageName });
+            int ret = 0; // executeCommandAndWaitFor(new String[] { "pm", "clear", packageName });
             return ret == 0;
         } catch (Exception e) {
             Logger.wformat("Clear package %s results in error %s", packageName, e);

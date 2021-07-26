@@ -28,6 +28,7 @@ import javax.xml.xpath.XPathConstants;
 import javax.xml.xpath.XPathExpression;
 import javax.xml.xpath.XPathExpressionException;
 
+import com.android.commands.monkey.MonkeySourceApe;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -53,7 +54,7 @@ import android.view.accessibility.AccessibilityNodeInfo;
 public class GUITreeBuilder {
 
 
-    static Pattern BOUNDS_RECT = Pattern.compile("\\[([0-9]+),([0-9]+)]\\[([0-9]+),([0-9]+)]");
+    static Pattern BOUNDS_RECT = Pattern.compile("\\[(-?[0-9]+),(-?[0-9]+)]\\[(-?[0-9]+),(-?[0-9]+)]");
     static Comparator<Entry<Name, ?>> comparator = new Comparator<Entry<Name, ?>>() {
 
         @Override
@@ -111,8 +112,8 @@ public class GUITreeBuilder {
     static Rect parseRect(String bounds) {
         Matcher m = BOUNDS_RECT.matcher(bounds);
         if (m.matches()) {
-            return new Rect(Integer.valueOf(m.group(1)), Integer.valueOf(m.group(2)), Integer.valueOf(m.group(3)),
-                    Integer.valueOf(m.group(4)));
+            return new Rect(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)), Integer.parseInt(m.group(3)),
+                    Integer.parseInt(m.group(4)));
         }
         return null;
     }
@@ -181,10 +182,11 @@ public class GUITreeBuilder {
     }
 
     protected GUITree buildGUITree(Document document) {
-        this.document = document;
-        GUITreeNode rootNode = buildNodeFromXml(document);
+        // this.document = document;
+        this.document = createDocument();
+        GUITreeNode rootNode = buildNodeFromXml(document, this.document);
         tree = new GUITree(rootNode, activity);
-        tree.setDocument(document);
+        tree.setDocument(this.document);
         Naming current = nm.getNaming(tree);
         NamingResult results = current.naming(tree, true);
         tree.setCurrentNaming(current, results.getNames(), results.getNodes());
@@ -201,8 +203,18 @@ public class GUITreeBuilder {
     }
 
     protected GUITreeNode buildNodeAndXmlFromNodeInfo(AccessibilityNodeInfo info, Bitmap image) {
+        GUITreeNode root;
         document = createDocument();
-        GUITreeNode root = buildNodeAndXmlFromNodeInfo(null, document, info, 0);
+        if (info == MonkeySourceApe.magicNodeInfo) {
+            try {
+                Document srcDocument = Utils.readXml(MonkeySourceApe.XML_DUMP_PATH);
+                root = buildNodeFromXml(srcDocument, document);
+            } catch (Exception e) {
+                throw new IllegalArgumentException("Cannot build from " + MonkeySourceApe.XML_DUMP_PATH, e);
+            }
+        } else {
+            root = buildNodeAndXmlFromNodeInfo(null, document, info, 0);
+        }
         if (document != null) {
             document.appendChild(root.getDomNode());
             applyXPathlets(document);
@@ -457,29 +469,47 @@ public class GUITreeBuilder {
         return false;
     }
 
-    protected GUITreeNode buildNodeFromXml(Document document) {
-        GUITreeNode root = buildNodeFromXml(null, 0, getFirstChildElement(document.getDocumentElement()));
-        return root;
+    protected GUITreeNode buildNodeFromXml(Document srcDocument, org.w3c.dom.Node destDocument) {
+        return buildNodeFromXml(null, 0, getFirstChildElement(srcDocument.getDocumentElement()), destDocument);
     }
 
-    private GUITreeNode buildNodeFromXml(GUITreeNode parent, int index, Element e) {
+    private String getAttrOrNull(Element e, String name) {
+        return e.hasAttribute(name) ? e.getAttribute(name) : null;
+    }
+
+    private GUITreeNode buildNodeFromXml(GUITreeNode parent, int index, Element e, org.w3c.dom.Node parentXML) {
         GUITreeNode n = new GUITreeNode(parent);
-        n.setIndex(Integer.valueOf(e.getAttribute("index")));
-        n.setResourceID(e.getAttribute("resource-id"));
-        n.setClassName(e.getAttribute("class"));
-        n.setPackageName(e.getAttribute("package"));
-        n.setText(e.getAttribute("text"));
+        n.setIndex(Integer.parseInt(getAttrOrNull(e, "index")));
+        n.setResourceID(
+                StringCache.cacheStringEmptyOnNull(
+                        getAttrOrNull(e, "resource-id")));
+        n.setClassName(
+                StringCache.cacheStringEmptyOnNull(
+                        getAttrOrNull(e, "class")));
+        n.setPackageName(
+                StringCache.cacheStringEmptyOnNull(
+                        getAttrOrNull(e, "package")));
+        n.setText(
+                StringCache.cacheStringEmptyOnNull(
+                        StringCache.truncateText(
+                                StringCache.removeQuotes(
+                                        getAttrOrNull(e, "text"))),
+                        true));
+        n.setContentDesc(
+                StringCache.cacheStringEmptyOnNull(
+                        StringCache.removeQuotes(
+                                getAttrOrNull(e, "content-desc"))));
 
-        n.setClickable(Boolean.valueOf(e.getAttribute("clickable")));
-        n.setLongClickable(Boolean.valueOf(e.getAttribute("long-clickable")));
-        n.setCheckable(Boolean.valueOf(e.getAttribute("checkable")));
-        n.setScrollable(Boolean.valueOf(e.getAttribute("scrollable")));
+        n.setClickable(Boolean.parseBoolean(e.getAttribute("clickable")));
+        n.setLongClickable(Boolean.parseBoolean(e.getAttribute("long-clickable")));
+        n.setCheckable(Boolean.parseBoolean(e.getAttribute("checkable")));
+        n.setScrollable(Boolean.parseBoolean(e.getAttribute("scrollable")));
 
-        n.setFocusable(Boolean.valueOf(e.getAttribute("focusable")));
-        n.setFocused(Boolean.valueOf(e.getAttribute("focused")));
+        n.setFocusable(Boolean.parseBoolean(e.getAttribute("focusable")));
+        n.setFocused(Boolean.parseBoolean(e.getAttribute("focused")));
 
-        n.setChecked(Boolean.valueOf(e.getAttribute("checked")));
-        n.setEnabled(Boolean.valueOf(e.getAttribute("enabled")));
+        n.setChecked(Boolean.parseBoolean(e.getAttribute("checked")));
+        n.setEnabled(Boolean.parseBoolean(e.getAttribute("enabled")));
 
         Rect bounds = parseRect(e.getAttribute("bounds"));
         n.setBoundsInScreen(bounds);
@@ -490,17 +520,33 @@ public class GUITreeBuilder {
         }
 
         // patch scroll-type
-        e.setAttribute("scroll-type", n.getScrollType());
+        // e.setAttribute("scroll-type", n.getScrollType());
+        Element xml = null;
+        if (parentXML != null) {
+            xml = createNodeElement(n);
+            n.setDomNode(xml);
+        }
 
-        NodeList nl = e.getChildNodes(); // this list include text and other
-        // nodes.
+        NodeList nl = e.getChildNodes(); // this list include text and other nodes.
         int ci = 0;
         for (int i = 0; i < nl.getLength(); i++) {
-            org.w3c.dom.Node xml = nl.item(i);
-            if (xml instanceof Element) {
-                n.addChild(buildNodeFromXml(n, ci++, (Element) xml));
+            org.w3c.dom.Node c = nl.item(i);
+            if (!(c instanceof Element)) continue;
+            Element x = (Element) c;
+            if (!x.hasAttribute("class")) {
+                if (!excludeEmptyChild) {
+                    GUITreeNode childNode = GUITreeNode.buildEmptyNode(n);
+                    childNode.setDomNode(createNodeElement());
+                    n.addChild(childNode);
+                }
+            } else {
+                // UIAutomator generated XMLs contain only visible elements.
+                GUITreeNode childNode = buildNodeFromXml(n, ci++, x, xml);
+                if (alwaysIgnoreWebView && childNode.isWebView()) continue;
+                n.addChild(childNode);
             }
         }
+        if (!alwaysIgnoreWebView && n.isWebView()) checkAndRemoveWebView(n);
         return n;
     }
 

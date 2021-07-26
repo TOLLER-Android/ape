@@ -21,6 +21,7 @@ import com.android.commands.monkey.ape.tree.GUITree;
 import com.android.commands.monkey.ape.tree.GUITreeBuilder;
 import com.android.commands.monkey.ape.tree.GUITreeNode;
 import com.android.commands.monkey.ape.utils.Logger;
+import com.android.commands.monkey.ape.utils.RandomHelper;
 
 /**
  * This is an experimental feature.
@@ -101,12 +102,11 @@ public class XPathActionController {
     }
 
     private ModelAction fillActionBuffer(State state, GUITree tree) {
-        Random rand = new Random();
         for (XPathActionSequence actionSeq : actions) {
             if (actionSeq.isEmpty()) {
                 continue;
             }
-            if (rand.nextDouble() >= actionSeq.getProbability()) {
+            if (RandomHelper.nextDouble() >= actionSeq.getProbability()) {
                 continue;
             }
             XPathAction xa = actionSeq.get(0);

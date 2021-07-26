@@ -7,7 +7,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ThreadLocalRandom;
 
 import static com.android.commands.monkey.ape.utils.Config.truncateTextLength;
 
@@ -93,7 +92,7 @@ public class StringCache {
         if (strings.size() == 1) {
             return strings.get(0);
         }
-        int i = ThreadLocalRandom.current().nextInt(strings.size());
+        int i = RandomHelper.nextInt(strings.size());
         return strings.get(i);
     }
 
@@ -107,7 +106,7 @@ public class StringCache {
         if (RandomHelper.nextBoolean()) {
             return RandomHelper.nextString();
         }
-        int i = ThreadLocalRandom.current().nextInt(stringList.size());
+        int i = RandomHelper.nextInt(stringList.size());
         String string = stringList.get(i);
         int length = RandomHelper.nextInt(Config.maxStringPieceLength) + 1;
         if (string.length() <= length) {
