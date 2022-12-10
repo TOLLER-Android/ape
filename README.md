@@ -1,5 +1,9 @@
 # README
 
+## Prebuilt Binary
+
+Available [here](https://github.com/TOLLER-Android/ape/releases/download/release-20210725/ape.jar). You need to place `ape.jar` in the repo's root directory.
+
 ## Build
 
 Ape is developed in Java using Android SDK (including some private internal APIs)
